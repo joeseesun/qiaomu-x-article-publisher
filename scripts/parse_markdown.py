@@ -387,11 +387,39 @@ def markdown_to_html(markdown: str) -> str:
     # Strikethrough
     html = re.sub(r'~~(.+?)~~', r'<del>\1</del>', html)
 
-    # Bold (must be before italic)
-    html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
+    # === ROBUST BOLD/ITALIC PROCESSING ===
+    # Process line by line to avoid cross-line matching issues with unclosed markers
 
-    # Italic
-    html = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', html)
+    def process_inline_formatting(line: str) -> str:
+        """Process bold and italic within a single line, handling unclosed markers gracefully."""
+        # Skip lines that are already HTML elements or placeholders
+        if line.startswith('<') or line.startswith('@@@'):
+            return line
+
+        # First, handle bold (**text**) - only match properly closed pairs
+        # Use word boundary and non-greedy matching within the same line
+        line = re.sub(r'\*\*([^*\n]+?)\*\*', r'<strong>\1</strong>', line)
+
+        # Handle line-start italic for image captions: *图1：...*
+        # This pattern: starts with *, ends with * at line end, no * in between
+        line = re.sub(r'^\*([^*\n]+)\*$', r'<em>\1</em>', line)
+
+        # Handle inline italic (*text*) - must have proper closure within the same segment
+        # Only match if there's a closing * and content doesn't contain * or newlines
+        line = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'<em>\1</em>', line)
+
+        return line
+
+    # Process formatting line by line
+    lines = html.split('\n')
+    processed_lines = [process_inline_formatting(line) for line in lines]
+    html = '\n'.join(processed_lines)
+
+    # Clean up any remaining unpaired * or ** markers that could cause display issues
+    # Remove orphaned ** at line start (unclosed bold)
+    html = re.sub(r'^\*\*(?![^*]*\*\*)', '', html, flags=re.MULTILINE)
+    # Remove orphaned * at line start that's not part of a list and not followed by space (unclosed italic)
+    html = re.sub(r'^\*(?![* \n])', '', html, flags=re.MULTILINE)
 
     # Links
     html = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', html)
