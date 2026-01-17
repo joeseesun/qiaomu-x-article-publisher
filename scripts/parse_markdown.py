@@ -86,7 +86,8 @@ def split_into_blocks(markdown: str) -> list[str]:
             continue
 
         # Image on its own line is its own block
-        if re.match(r'^!\[.*\]\(.*\)$', stripped):
+        # Support both standard Markdown ![alt](path) and Obsidian ![[filename]] syntax
+        if re.match(r'^!\[.*\]\(.*\)$', stripped) or re.match(r'^!\[\[.+\]\]$', stripped):
             if current_block:
                 blocks.append('\n'.join(current_block))
                 current_block = []
@@ -166,11 +167,17 @@ def extract_images_with_placeholders(markdown: str, base_path: Path) -> tuple[li
     images = []
     result_blocks = []
 
+    # Standard Markdown: ![alt](path)
     img_pattern = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
+    # Obsidian format: ![[filename]] or ![[filename|alt]]
+    obsidian_pattern = re.compile(r'^!\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$')
     image_index = 0
 
     for i, block in enumerate(blocks):
-        match = img_pattern.match(block.strip())
+        stripped = block.strip()
+        match = img_pattern.match(stripped)
+        obsidian_match = obsidian_pattern.match(stripped)
+
         if match:
             alt_text = match.group(1)
             img_path = match.group(2)
@@ -187,6 +194,42 @@ def extract_images_with_placeholders(markdown: str, base_path: Path) -> tuple[li
             })
 
             # Insert placeholder block (will be converted to HTML comment)
+            result_blocks.append(f"___{placeholder_id}___")
+            image_index += 1
+        elif obsidian_match:
+            # Obsidian format: ![[filename]] or ![[filename|alt]]
+            filename = obsidian_match.group(1).strip()
+            alt_text = obsidian_match.group(2) or filename if obsidian_match.lastindex >= 2 else filename
+
+            # Try to find the file in common locations
+            full_path = None
+            candidates = [
+                base_path / filename,                    # Same directory
+                base_path / "assets" / filename,         # assets subdirectory
+                base_path / ".." / filename,             # Parent directory
+                base_path / ".." / "assets" / filename,  # Parent's assets
+            ]
+
+            for candidate in candidates:
+                if candidate.exists():
+                    full_path = str(candidate.resolve())
+                    break
+
+            if not full_path:
+                # Fallback: use assets directory path even if not verified
+                full_path = str(base_path / "assets" / filename)
+
+            # Create placeholder
+            placeholder_id = f"IMG_PLACEHOLDER_{image_index}"
+
+            images.append({
+                "path": full_path,
+                "alt": alt_text,
+                "placeholder_id": placeholder_id,
+                "index": image_index
+            })
+
+            # Insert placeholder block
             result_blocks.append(f"___{placeholder_id}___")
             image_index += 1
         else:
@@ -392,9 +435,19 @@ def markdown_to_html(markdown: str) -> str:
 
     def process_inline_formatting(line: str) -> str:
         """Process bold and italic within a single line, handling unclosed markers gracefully."""
-        # Skip lines that are already HTML elements or placeholders
-        if line.startswith('<') or line.startswith('@@@'):
+        # Skip placeholder lines only
+        if line.startswith('@@@'):
             return line
+
+        # For HTML block elements, process the inner content
+        # Match pattern like <h2>content</h2> and process the content part
+        block_match = re.match(r'^(<(?:h[2-6]|blockquote|p)>)(.*)(</(?:h[2-6]|blockquote|p)>)$', line)
+        if block_match:
+            prefix, content, suffix = block_match.groups()
+            # Process bold in the inner content
+            content = re.sub(r'\*\*([^*\n]+?)\*\*', r'<strong>\1</strong>', content)
+            content = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'<em>\1</em>', content)
+            return prefix + content + suffix
 
         # First, handle bold (**text**) - only match properly closed pairs
         # Use word boundary and non-greedy matching within the same line
