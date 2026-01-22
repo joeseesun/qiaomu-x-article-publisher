@@ -107,19 +107,45 @@ def split_into_blocks(markdown: str) -> list[str]:
 
 
 def resolve_image_path(img_path: str, base_path: Path) -> str:
-    """Resolve image path to absolute path."""
+    """Resolve image path to absolute path.
+
+    Supports:
+    - Absolute paths
+    - Relative paths from markdown file
+    - Obsidian-style filename-only references (searches in .assets folder)
+    """
     if os.path.isabs(img_path):
         return img_path
 
     # Try multiple resolution strategies
     full_path = None
 
+    # Get just the filename for searching
+    img_filename = Path(img_path).name
+
     # Strategy 1: Relative to markdown file directory
     candidate1 = base_path / img_path
     if candidate1.exists():
         full_path = str(candidate1)
 
-    # Strategy 2: Path might be relative to a parent directory
+    # Strategy 2: Check .assets folder (Obsidian convention: {filename}.assets/)
+    # This handles the case where images are referenced by filename only
+    if not full_path:
+        # Find all .assets directories in base_path
+        for assets_dir in base_path.glob("*.assets"):
+            candidate = assets_dir / img_filename
+            if candidate.exists():
+                full_path = str(candidate)
+                break
+
+    # Strategy 3: Check if img_path itself is just a filename, search in base_path
+    if not full_path and '/' not in img_path and '\\' not in img_path:
+        # It's just a filename, search in base_path directly
+        candidate = base_path / img_filename
+        if candidate.exists():
+            full_path = str(candidate)
+
+    # Strategy 4: Path might be relative to a parent directory
     # (e.g., Obsidian paths like "01.inbox/papers/.../image.png")
     if not full_path:
         # Walk up the directory tree to find the root
@@ -130,11 +156,19 @@ def resolve_image_path(img_path: str, base_path: Path) -> str:
             if candidate.exists():
                 full_path = str(candidate)
                 break
+            # Also check .assets folders at each level
+            for assets_dir in parent.glob("*.assets"):
+                candidate = assets_dir / img_filename
+                if candidate.exists():
+                    full_path = str(candidate)
+                    break
+            if full_path:
+                break
             if parent == current:  # Reached root
                 break
             current = parent
 
-    # Strategy 3: Check common knowledge base roots
+    # Strategy 5: Check common knowledge base roots
     if not full_path:
         common_roots = [
             Path.home() / "乔木新知识库",
@@ -522,8 +556,11 @@ def parse_markdown_file(filepath: str, use_placeholders: bool = True) -> dict:
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # Extract title first (and remove H1 from markdown)
-    title, content, title_source = extract_title(content)
+    # Use filename as title (remove .md extension)
+    title = path.stem  # e.g., "AI时代的软件开发，为什么大公司只提升了10%效率？"
+
+    # Still extract and remove H1 from content to avoid duplication
+    _, content, title_source = extract_title(content)
 
     if use_placeholders:
         # New method: Extract images and insert placeholders
@@ -535,12 +572,12 @@ def parse_markdown_file(filepath: str, use_placeholders: bool = True) -> dict:
         images, clean_markdown, total_blocks = extract_images_with_block_index(content, base_path)
         html = markdown_to_html(clean_markdown)
 
-    # Determine if title needs generation
-    needs_title_generation = title_source not in ("h1",)  # Only h1 is a proper title
+    # Title comes from filename, so no generation needed
+    needs_title_generation = False
 
     return {
         "title": title,
-        "title_source": title_source,  # "h1", "h2", "first_line", or "none"
+        "title_source": "filename",  # Always use filename
         "needs_title_generation": needs_title_generation,
         "cover_image": None,  # No automatic cover image
         "needs_cover_generation": False,  # User handles cover manually

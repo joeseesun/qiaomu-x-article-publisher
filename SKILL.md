@@ -66,11 +66,11 @@ Located in `~/.claude/skills/x-article-publisher/scripts/`:
 ### publish_article.py (主脚本 - 一键发布)
 **推荐使用** - 自动完成所有发布步骤：
 ```bash
-# 基本用法
+# 基本用法（默认显示浏览器）
 python publish_article.py --file article.md
 
-# 显示浏览器（调试用）
-python publish_article.py --file article.md --show-browser
+# 隐藏浏览器（后台运行）
+python publish_article.py --file article.md --headless
 
 # 自定义标题
 python publish_article.py --file article.md --title "自定义标题"

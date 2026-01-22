@@ -30,6 +30,10 @@ import json
 import sys
 import time
 import subprocess
+import signal
+import os
+import fcntl
+import atexit
 from pathlib import Path
 
 from patchright.sync_api import sync_playwright
@@ -48,6 +52,95 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from browser_auth import BrowserAuthManager, BrowserFactory
 from site_config import X_TWITTER_CONFIG
+
+
+# ============================================================================
+# PROCESS MANAGEMENT - 防止僵尸进程
+# ============================================================================
+LOCK_FILE = DATA_DIR / "publish.lock"
+MAX_RUNTIME_SECONDS = 600  # 10分钟总超时
+WAIT_AFTER_PUBLISH = 10    # 发布后等待秒数（可通过 --wait 参数覆盖）
+
+# 全局变量用于清理
+_playwright_instance = None
+_browser_context = None
+_lock_fd = None
+
+
+def acquire_lock():
+    """获取进程锁，防止并发"""
+    global _lock_fd
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _lock_fd = open(LOCK_FILE, 'w')
+        fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+        return True
+    except (IOError, OSError):
+        print("❌ 另一个发布进程正在运行。请等待或手动清理。")
+        print(f"   锁文件: {LOCK_FILE}")
+        return False
+
+
+def release_lock():
+    """释放进程锁"""
+    global _lock_fd
+    if _lock_fd:
+        try:
+            fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_UN)
+            _lock_fd.close()
+            LOCK_FILE.unlink(missing_ok=True)
+        except:
+            pass
+        _lock_fd = None
+
+
+def cleanup():
+    """清理资源"""
+    global _playwright_instance, _browser_context
+
+    if _browser_context:
+        try:
+            _browser_context.close()
+        except:
+            pass
+        _browser_context = None
+
+    if _playwright_instance:
+        try:
+            _playwright_instance.stop()
+        except:
+            pass
+        _playwright_instance = None
+
+    release_lock()
+
+
+def signal_handler(signum, frame):
+    """信号处理器"""
+    print(f"\n⚠️  收到信号 {signum}，正在清理...")
+    cleanup()
+    sys.exit(1)
+
+
+# 注册清理函数
+atexit.register(cleanup)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+def check_chrome_running():
+    """检查是否有 Chrome 使用相同的 profile"""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', str(BROWSER_PROFILE_DIR)],
+            capture_output=True,
+            text=True
+        )
+        return bool(result.stdout.strip())
+    except:
+        return False
 
 
 # ============================================================================
@@ -131,11 +224,24 @@ class ArticlePublisher:
 
         return result.returncode == 0
 
-    def publish(self, file_path: str, custom_title: str = None, custom_cover: str = None, headless: bool = True) -> bool:
+    def publish(self, file_path: str, custom_title: str = None, custom_cover: str = None, headless: bool = True, wait_seconds: int = WAIT_AFTER_PUBLISH) -> bool:
         """发布文章到 X"""
+        global _playwright_instance, _browser_context
+
+        # Step 0: 获取进程锁
+        if not acquire_lock():
+            return False
+
+        start_time = time.time()
 
         # Step 1: 检查认证
         if not self.check_auth():
+            return False
+
+        # Step 1.5: 检查 Chrome 是否已运行
+        if check_chrome_running():
+            print("⚠️  检测到 Chrome 正在运行（使用相同的 profile）")
+            print("   请关闭现有 Chrome 窗口后重试，或手动发布。")
             return False
 
         # Step 2: 解析 Markdown
@@ -157,9 +263,15 @@ class ArticlePublisher:
         context = None
 
         try:
+            # 检查超时
+            if time.time() - start_time > MAX_RUNTIME_SECONDS:
+                print("❌ 超时：准备阶段超时")
+                return False
+
             # Step 3: 启动浏览器
             print("\n🌐 启动浏览器...")
             playwright = sync_playwright().start()
+            _playwright_instance = playwright  # 保存到全局变量用于清理
 
             context = BrowserFactory.launch_persistent_context(
                 playwright,
@@ -167,6 +279,7 @@ class ArticlePublisher:
                 state_file=STATE_FILE,
                 headless=headless
             )
+            _browser_context = context  # 保存到全局变量用于清理
 
             page = context.new_page()
 
@@ -662,15 +775,14 @@ class ArticlePublisher:
                                 time.sleep(3)
 
             # Step 10: 清理剩余的占位符
-            # 策略：如果整行只有占位符，删除整行；否则只删除占位符
-            # 每次操作后等待编辑器响应
+            # 策略：只精确删除占位符文本本身，不删除整行（避免误删内容）
             print("  🧹 清理剩余占位符...")
 
             max_cleanup_rounds = 30
             total_cleaned = 0
 
             for round_num in range(max_cleanup_rounds):
-                # 查找下一个占位符，并判断是否需要删除整行
+                # 查找并选中下一个占位符
                 cleanup_result = page.evaluate('''() => {
                     const editors = document.querySelectorAll('[contenteditable="true"]');
                     let bodyEditor = null;
@@ -709,45 +821,22 @@ class ArticlePublisher:
                                 parentEl.scrollIntoView({ behavior: 'instant', block: 'center' });
                             }
 
-                            // 检查这一行是否只有占位符（去除空白后）
-                            const lineText = parentEl ? parentEl.innerText.trim() : node.textContent.trim();
-                            const isOnlyPlaceholder = lineText === match[0] ||
-                                                       lineText.replace(/@@@IMG_\\d+@@@/g, '').trim() === '';
+                            // 只精确选中占位符文本
+                            const startOffset = node.textContent.indexOf(match[0]);
+                            const range = document.createRange();
+                            const sel = window.getSelection();
 
-                            if (isOnlyPlaceholder && parentEl) {
-                                // 整行只有占位符，选中整个段落元素
-                                const range = document.createRange();
-                                const sel = window.getSelection();
+                            range.setStart(node, startOffset);
+                            range.setEnd(node, startOffset + match[0].length);
 
-                                range.selectNodeContents(parentEl);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
 
-                                sel.removeAllRanges();
-                                sel.addRange(range);
-
-                                return {
-                                    found: true,
-                                    placeholder: match[0],
-                                    deleteWholeLine: true,
-                                    lineText: lineText.substring(0, 50)
-                                };
-                            } else {
-                                // 只删除占位符文本
-                                const startOffset = node.textContent.indexOf(match[0]);
-                                const range = document.createRange();
-                                const sel = window.getSelection();
-
-                                range.setStart(node, startOffset);
-                                range.setEnd(node, startOffset + match[0].length);
-
-                                sel.removeAllRanges();
-                                sel.addRange(range);
-
-                                return {
-                                    found: true,
-                                    placeholder: match[0],
-                                    deleteWholeLine: false
-                                };
-                            }
+                            return {
+                                found: true,
+                                placeholder: match[0],
+                                selectedText: sel.toString()
+                            };
                         }
                     }
 
@@ -757,14 +846,9 @@ class ArticlePublisher:
                 if not cleanup_result.get('found'):
                     break
 
-                # 删除选中的内容
+                # 删除选中的占位符
                 page.keyboard.press("Backspace")
                 time.sleep(0.3)
-
-                # 如果删除的是整行，需要再按一次 Backspace 删除空行
-                if cleanup_result.get('deleteWholeLine'):
-                    page.keyboard.press("Backspace")
-                    time.sleep(0.3)
 
                 total_cleaned += 1
 
@@ -861,18 +945,14 @@ class ArticlePublisher:
             }''')
             print(f"  ✅ 保存状态检查完成")
 
-            # Step 12: 完成，保持浏览器打开
-            print("\n✅ 草稿已创建并保存！")
+            # Step 12: 完成
+            elapsed = int(time.time() - start_time)
+            print(f"\n✅ 草稿已创建并保存！（用时 {elapsed} 秒）")
             print("  💡 请在浏览器中检查并手动发布")
-            print("  🖥️  浏览器保持打开中...")
-            print("  ⌨️  按 Ctrl+C 退出脚本（浏览器会保持打开）")
 
-            # 保持脚本运行，让浏览器保持打开
-            try:
-                while True:
-                    time.sleep(60)  # 每分钟检查一次
-            except KeyboardInterrupt:
-                print("\n  👋 脚本已退出，浏览器保持打开")
+            if wait_seconds > 0:
+                print(f"  ⏳ 等待 {wait_seconds} 秒后自动退出...")
+                time.sleep(wait_seconds)
 
             return True
 
@@ -882,13 +962,19 @@ class ArticlePublisher:
             traceback.print_exc()
             return False
 
+        finally:
+            # 确保清理资源
+            cleanup()
+
 
 def main():
     parser = argparse.ArgumentParser(description='发布文章到 X Articles')
     parser.add_argument('--file', required=True, help='Markdown 文件路径')
     parser.add_argument('--title', help='自定义标题（覆盖文件中的标题）')
     parser.add_argument('--cover', help='自定义封面图路径（覆盖文件中的封面）')
-    parser.add_argument('--show-browser', action='store_true', help='显示浏览器窗口')
+    parser.add_argument('--headless', action='store_true', help='隐藏浏览器窗口（默认显示）')
+    parser.add_argument('--wait', type=int, default=WAIT_AFTER_PUBLISH,
+                        help=f'发布后等待秒数（默认 {WAIT_AFTER_PUBLISH}，0=立即退出）')
 
     args = parser.parse_args()
 
@@ -897,7 +983,8 @@ def main():
         file_path=args.file,
         custom_title=args.title,
         custom_cover=args.cover,
-        headless=not args.show_browser
+        headless=args.headless,
+        wait_seconds=args.wait
     )
 
     sys.exit(0 if success else 1)
