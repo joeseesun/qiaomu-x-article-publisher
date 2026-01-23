@@ -156,20 +156,20 @@ def main():
 
     if args.command == 'setup':
         print("\n" + "="*70)
-        print("  🐦 X (Twitter) Authentication Setup")
+        print("  X (Twitter) Authentication Setup")
         print("="*70)
-        print("\n📝 Prerequisites:")
-        print("  ✓ X Premium+ subscription (required for Articles)")
-        print("  ✓ X account credentials ready")
+        print("\nPrerequisites:")
+        print("  - X Premium+ subscription (required for Articles)")
+        print("  - X account credentials ready")
         print()
-        print("📖 Instructions:")
+        print("Instructions:")
         print("  1. Browser window will open to X login page")
         print("  2. Sign in with your X account")
         print("  3. Complete 2FA if enabled")
         print("  4. Wait for redirect to Home timeline")
         print("  5. Authentication will be saved automatically")
         print()
-        print("⏱️  Timeout: {} minutes\n".format(int(args.timeout)))
+        print("Timeout: {} minutes\n".format(int(args.timeout)))
 
         success = auth.setup_auth(
             headless=args.headless,
@@ -178,15 +178,15 @@ def main():
 
         if success:
             print("\n" + "="*70)
-            print("  ✅ Authentication setup complete!")
+            print("  Authentication setup complete!")
             print("="*70)
-            print("\n  🎉 You can now publish articles without logging in!")
-            print("  📅 Authentication valid for 7 days\n")
+            print("\n  You can now publish articles without logging in!")
+            print("  Authentication valid for 7 days\n")
         else:
             print("\n" + "="*70)
-            print("  ❌ Authentication setup failed")
+            print("  Authentication setup failed")
             print("="*70)
-            print("\n  💡 Troubleshooting:")
+            print("\n  Troubleshooting:")
             print("    - Ensure you completed login within timeout")
             print("    - Check your X credentials")
             print("    - Verify Premium+ subscription is active\n")
@@ -196,7 +196,7 @@ def main():
     elif args.command == 'status':
         info = auth.get_auth_info()
         print("\n" + "="*70)
-        print("  🐦 X (Twitter) Authentication Status")
+        print("  X (Twitter) Authentication Status")
         print("="*70)
         for key, value in info.items():
             print(f"  {key}: {value}")
@@ -204,32 +204,32 @@ def main():
         sys.exit(0 if info['authenticated'] else 1)
 
     elif args.command == 'validate':
-        print("\n🔍 Validating X authentication...")
+        print("\nValidating X authentication...")
         is_valid = auth.validate_auth()
 
         if is_valid:
-            print("\n✅ Authentication is valid")
+            print("\nAuthentication is valid")
             print("  You can publish articles now!\n")
         else:
-            print("\n❌ Authentication is invalid")
+            print("\nAuthentication is invalid")
             print("  Please run: python auth_manager.py setup\n")
 
         sys.exit(0 if is_valid else 1)
 
     elif args.command == 'clear':
-        print("\n🗑️  Clearing X authentication data...")
+        print("\nClearing X authentication data...")
         success = auth.clear_auth()
 
         if success:
-            print("\n✅ Authentication data cleared")
+            print("\nAuthentication data cleared")
             print("  Run 'setup' to re-authenticate\n")
         else:
-            print("\n❌ Failed to clear authentication data\n")
+            print("\nFailed to clear authentication data\n")
 
         sys.exit(0 if success else 1)
 
     elif args.command == 'reauth':
-        print("\n🔄 Re-authenticating X account...")
+        print("\nRe-authenticating X account...")
 
         # Step 1: Clear existing auth
         print("\n  Step 1/2: Clearing old authentication...")
@@ -241,10 +241,10 @@ def main():
         success = auth.setup_auth(timeout_minutes=int(args.timeout))
 
         if success:
-            print("\n✅ Re-authentication complete!")
+            print("\nRe-authentication complete!")
             print("  Ready to publish articles\n")
         else:
-            print("\n❌ Re-authentication failed")
+            print("\nRe-authentication failed")
             print("  Please try again or check credentials\n")
 
         sys.exit(0 if success else 1)

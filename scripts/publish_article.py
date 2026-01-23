@@ -32,7 +32,7 @@ import time
 import subprocess
 import signal
 import os
-import fcntl
+import platform
 import atexit
 from pathlib import Path
 
@@ -73,12 +73,19 @@ def acquire_lock():
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         _lock_fd = open(LOCK_FILE, 'w')
-        fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Windows 不支持 fcntl，使用简单锁定
+        if platform.system() == 'Windows':
+            import msvcrt
+            msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
         _lock_fd.write(str(os.getpid()))
         _lock_fd.flush()
         return True
     except (IOError, OSError):
-        print("❌ 另一个发布进程正在运行。请等待或手动清理。")
+        print("Another publish process is running. Please wait or manually clean up.")
         print(f"   锁文件: {LOCK_FILE}")
         return False
 
@@ -88,7 +95,11 @@ def release_lock():
     global _lock_fd
     if _lock_fd:
         try:
-            fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_UN)
+            if platform.system() == 'Windows':
+                import msvcrt
+                msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_UN)
             _lock_fd.close()
             LOCK_FILE.unlink(missing_ok=True)
         except:
@@ -173,7 +184,7 @@ class ArticlePublisher:
     def check_auth(self) -> bool:
         """检查认证状态"""
         if not self.auth_manager.is_authenticated():
-            print("❌ 未认证。请先运行：python auth_manager.py setup")
+            print("Authentication not set up. Please run: python auth_manager.py setup")
             return False
         return True
 
@@ -183,9 +194,10 @@ class ArticlePublisher:
         parse_script = script_dir / "parse_markdown.py"
 
         result = subprocess.run(
-            ["python3", str(parse_script), file_path],
+            ["python", str(parse_script), file_path],
             capture_output=True,
-            text=True
+            text=True,
+            encoding='utf-8'
         )
 
         if result.returncode != 0:
@@ -200,14 +212,20 @@ class ArticlePublisher:
         copy_script = script_dir / "copy_to_clipboard.py"
 
         # 保存 HTML 到临时文件
-        temp_file = Path("/tmp/x_article_content.html")
-        temp_file.write_text(html)
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
+            f.write(html)
+            temp_file = Path(f.name)
 
         result = subprocess.run(
-            ["python3", str(copy_script), "html", "--file", str(temp_file)],
+            ["python", str(copy_script), "html", "--file", str(temp_file)],
             capture_output=True,
-            text=True
+            text=True,
+            encoding='utf-8'
         )
+
+        # 清理临时文件
+        temp_file.unlink(missing_ok=True)
 
         return result.returncode == 0
 
@@ -438,7 +456,7 @@ class ArticlePublisher:
                         time.sleep(0.5)
 
                     # 粘贴
-                    page.keyboard.press("Meta+v")
+                    page.keyboard.press("Control+v")
                     print("  ✅ 已粘贴内容")
 
                     # 添加调试：查看粘贴后的 DOM 结构
