@@ -2,8 +2,8 @@
 
 > 🚀 一键发布 Markdown 文章到 X (Twitter) Articles，让写作更流畅
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -73,7 +73,12 @@ git clone https://github.com/joeseesun/qiaomu-x-article-publisher.git \
   ~/.claude/skills/qiaomu-x-article-publisher
 
 # 2. 安装 Python 依赖
+
+## macOS
 pip install Pillow pyobjc-framework-Cocoa patchright
+
+## Windows
+pip install Pillow pywin32 patchright
 
 # 3. 首次认证
 cd ~/.claude/skills/qiaomu-x-article-publisher/scripts
@@ -117,9 +122,20 @@ python publish_article.py --file article.md --title "更吸引人的标题"
 
 ## 📋 系统要求
 
-- macOS
+- **macOS** 或 **Windows**
 - Python 3.9+
 - X Premium Plus 订阅
+- 浏览器（Chrome/Chromium 用于认证）
+
+### 🎉 Windows 支持（新增）
+
+项目现已完全支持 Windows 平台，包括：
+- Windows 剪贴板操作
+- 中文 UTF-8 编码支持
+- 浏览器自动化认证
+- 完整的发布流程
+
+Windows 用户请使用 `pip install pywin32` 安装额外依赖。
 
 ---
 
@@ -132,7 +148,7 @@ A: `python auth_manager.py reauth`
 A: 不会，只保存为草稿，需手动发布
 
 **Q: 支持 Windows/Linux 吗？**
-A: 目前仅支持 macOS（使用 pyobjc 剪贴板功能）
+A: 支持 macOS 和 Windows（使用 pyobjc/pywin32 剪贴板功能），Linux 支持计划中
 
 ---
 
