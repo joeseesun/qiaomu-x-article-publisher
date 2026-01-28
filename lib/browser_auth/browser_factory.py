@@ -48,7 +48,11 @@ class BrowserFactory:
             配置好的 BrowserContext
         """
         if browser_args is None:
-            browser_args = DEFAULT_BROWSER_ARGS
+            browser_args = DEFAULT_BROWSER_ARGS + [
+                '--disable-blink-features=AutomationControlled',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
+            ]
 
         # 确保目录存在
         user_data_dir.mkdir(parents=True, exist_ok=True)
